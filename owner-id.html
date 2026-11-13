@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <meta name="robots" content="noindex,nofollow">
+  <title>リビング在室連携：本人IDの確認</title>
+  <style>
+    body { font: 17px/1.8 system-ui,sans-serif; background:#f5f7fa; color:#172b40; margin:0; }
+    main { max-width:700px; margin:40px auto; padding:28px; background:white; border-radius:12px; }
+    h1 { font-size:1.5rem; line-height:1.4; }
+    button { font:inherit; padding:10px 18px; border:0; border-radius:6px; cursor:pointer; background:#f3ca65; color:#172b40; }
+    button:disabled { opacity:.5; cursor:default; }
+    textarea { width:100%; box-sizing:border-box; font:15px/1.6 monospace; padding:12px; }
+    #status { min-height:2em; }
+    .note { color:#526273; font-size:.9rem; }
+    a { color:#185b9b; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>リビング在室連携：本人IDの確認</h1>
+  <p>Echoを登録しているAmazonアカウントでログインし、AWSの本人確認設定に使うIDを表示します。</p>
+  <p>氏名やメールアドレスの取得は要求しません。Client Secretの入力も不要です。</p>
+  <button id="login" type="button" disabled>AmazonでログインしてIDを確認</button>
+  <p id="status" role="status" aria-live="polite">Amazonのログイン機能を読み込み中です。</p>
+  <section id="result" hidden>
+    <label for="owner">本人ID（この値だけを設定担当へ伝えてください）</label>
+    <textarea id="owner" rows="3" readonly spellcheck="false" autocomplete="off"></textarea>
+    <button id="copy" type="button">本人IDをコピー</button>
+    <button id="clear" type="button">表示を消す</button>
+  </section>
+  <p class="note">IDはこのブラウザーに表示するだけで、GitHubやAWSへ送信しません。認証コードとアクセストークンは表示・記録せず、ID取得後にSDKのログイン状態を解除します。Amazon SDKが認証のために一時Cookieを使うので、Cookieとポップアップを許可してください。</p>
+  <p class="note">画面に出た本人IDを公開リポジトリへ書き込まないでください。</p>
+  <p><a href="./">プライバシーについて</a></p>
+</main>
+<div id="amazon-root"></div>
+<script>
+(() => {
+  "use strict";
+  const CLIENT_ID = "amzn1.application-oa2-client.f2aaf1e8912e460dbfa04bfcb4b0a2f5";
+  const ORIGIN = "https://matsukan629-sudo.github.io";
+  const login = document.getElementById("login");
+  const status = document.getElementById("status");
+  const result = document.getElementById("result");
+  const owner = document.getElementById("owner");
+  let ready = false;
+
+  function cleanSession() {
+    try { window.amazon.Login.logout(); } catch (_) { /* No credentials in errors. */ }
+  }
+
+  function fail(message) {
+    cleanSession();
+    owner.value = "";
+    result.hidden = true;
+    status.textContent = message;
+    login.disabled = !ready;
+  }
+
+  window.onAmazonLoginReady = function () {
+    if (window.location.origin !== ORIGIN || !window.isSecureContext) {
+      status.textContent = "GitHub Pagesにアップロードし、公開されたHTTPSのページを開いてください。";
+      return;
+    }
+    window.amazon.Login.setClientId(CLIENT_ID);
+    window.amazon.Login.setUseCookie(false);
+    ready = true;
+    login.disabled = false;
+    status.textContent = "Echoと同じAmazonアカウントでログインしてください。";
+  };
+
+  login.onclick = function () {
+    if (!ready) return;
+    owner.value = "";
+    result.hidden = true;
+    login.disabled = true;
+    status.textContent = "Amazonのログイン画面を確認してください。";
+    const state = window.crypto.randomUUID();
+    try {
+      window.amazon.Login.authorize({
+        scope: "profile:user_id", response_type: "code", pkce: true,
+        popup: true, interactive: "always", state: state
+      }, function (authorization) {
+        if (!authorization || authorization.error || typeof authorization.code !== "string" ||
+            authorization.state !== state) {
+          fail("ログインを確認できませんでした。ポップアップとLWAのAllowed Originsを確認して、もう一度お試しください。");
+          return;
+        }
+        window.amazon.Login.retrieveToken(authorization.code, function (token) {
+          if (!token || token.error || typeof token.access_token !== "string" || !token.access_token) {
+            fail("Amazonの認証処理を完了できませんでした。Cookieを許可して、もう一度お試しください。");
+            return;
+          }
+          window.amazon.Login.retrieveProfile(token.access_token, function (profile) {
+            const id = profile && profile.success && profile.profile && profile.profile.CustomerId;
+            if (typeof id !== "string" || !/^amzn1\.account\.[A-Za-z0-9_-]+$/.test(id)) {
+              fail("本人IDを取得できませんでした。設定担当へ、このメッセージだけを伝えてください。");
+              return;
+            }
+            owner.value = id;
+            result.hidden = false;
+            status.textContent = "本人IDを取得しました。このIDだけをコピーしてください。";
+            cleanSession();
+            login.disabled = false;
+          });
+        });
+      });
+    } catch (_) {
+      fail("ログインを開始できませんでした。ページを再読み込みしてお試しください。");
+    }
+  };
+
+  document.getElementById("copy").onclick = async function () {
+    if (!owner.value) return;
+    try {
+      await navigator.clipboard.writeText(owner.value);
+      status.textContent = "本人IDをコピーしました。";
+    } catch (_) {
+      owner.focus();
+      owner.select();
+      status.textContent = "本人IDを選択しました。Ctrl+Cでコピーしてください。";
+    }
+  };
+
+  document.getElementById("clear").onclick = function () {
+    cleanSession();
+    owner.value = "";
+    result.hidden = true;
+    status.textContent = "表示を消しました。";
+  };
+})();
+</script>
+<script async src="https://assets.loginwithamazon.com/sdk/na/login1.js"
+        onerror="document.getElementById('status').textContent='Amazonのログイン機能を読み込めませんでした。通信設定を確認して再読み込みしてください。'"></script>
+</body>
+</html>
